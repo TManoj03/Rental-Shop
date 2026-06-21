@@ -63,10 +63,10 @@ export async function PUT(
     if (data.status && eq.status !== data.status) {
       changes.push(`Status changed from "${eq.status}" to "${data.status}"`);
     }
-    if (data.model && eq.model !== data.model) {
+    if (data.model !== undefined && eq.model !== data.model) {
       changes.push(`Model changed from "${eq.model}" to "${data.model}"`);
     }
-    if (data.serial && eq.serial !== data.serial) {
+    if (data.serial !== undefined && eq.serial !== data.serial) {
       changes.push(`Serial changed from "${eq.serial}" to "${data.serial}"`);
     }
     if (
@@ -89,8 +89,8 @@ export async function PUT(
     if (data.rentedCount !== undefined)
       eq.rentedCount = Number(data.rentedCount);
     if (data.status) eq.status = data.status;
-    if (data.model) eq.model = data.model;
-    if (data.serial) eq.serial = data.serial;
+    if (data.model !== undefined) eq.model = data.model;
+    if (data.serial !== undefined) eq.serial = data.serial;
     if (data.maintenanceStatus) eq.maintenanceStatus = data.maintenanceStatus;
     if (data.description) eq.description = data.description;
     if (data.imageUrl !== undefined) eq.imageUrl = data.imageUrl;

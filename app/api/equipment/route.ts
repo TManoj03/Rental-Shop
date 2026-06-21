@@ -17,7 +17,7 @@ export async function POST(request: Request) {
   try {
     await dbConnect();
     const data = await request.json();
-    
+
     const newEq = new EquipmentModel({
       _id: `eq-${Date.now()}`,
       name: data.name,
@@ -31,7 +31,7 @@ export async function POST(request: Request) {
       serial: data.serial,
       maintenanceStatus: "Good",
       description: data.description,
-      imageUrl: data.imageUrl || ""
+      imageUrl: data.imageUrl || "",
     });
 
     await newEq.save();

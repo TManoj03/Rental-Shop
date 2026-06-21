@@ -40,6 +40,8 @@ export interface Booking {
   endDate: string;
   actualReturnDate?: string;
   totalCost: number;
+  paidAmount: number;      // advance / partial payment collected at booking time
+  balanceDue: number;      // remaining amount to collect at return
   status: "Active" | "Completed" | "Overdue" | "Reserved";
 }
 

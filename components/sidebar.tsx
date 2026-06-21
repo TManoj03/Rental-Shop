@@ -13,6 +13,7 @@ import {
   TrendingUp,
   X,
   History,
+  BarChart3,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -58,24 +59,37 @@ export function Sidebar({
         "bg-amber-500 text-slate-950 dark:bg-amber-500 dark:text-slate-950 font-bold animate-pulse",
     },
     { id: "audit", label: "Audit Logs", icon: History, badge: null },
+    { id: "reports", label: "Reports", icon: BarChart3, badge: null },
   ];
 
   return (
     <>
-      {/* Mobile Backdrop Overlay */}
-      {isOpen && (
-        <div
-          className="fixed inset-0 bg-black/60 z-40 lg:hidden backdrop-blur-xs transition-opacity duration-300"
-          onClick={onClose}
-        />
-      )}
+      {/* Mobile Backdrop Overlay — always mounted, fades in/out */}
+      <div
+        onClick={onClose}
+        className={cn(
+          "fixed inset-0 bg-black/60 z-40 lg:hidden backdrop-blur-sm transition-all duration-300 ease-in-out",
+          isOpen
+            ? "opacity-100 pointer-events-auto"
+            : "opacity-0 pointer-events-none",
+        )}
+        aria-hidden={!isOpen}
+      />
 
       <aside
         className={cn(
-          "w-64 border-r border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 flex flex-col h-screen transition-all duration-300 ease-in-out z-50 shrink-0",
-          "lg:sticky lg:top-0 lg:flex",
-          "fixed inset-y-0 left-0 lg:translate-x-0 lg:shadow-none shadow-2xl",
-          isOpen ? "translate-x-0 flex" : "-translate-x-full lg:flex hidden",
+          // Base layout — always in the DOM so animations work in both directions
+          "w-64 border-r border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 flex flex-col h-screen z-50 shrink-0",
+          // Desktop: sticky sidebar, always visible
+          "lg:sticky lg:top-0 lg:translate-x-0 lg:shadow-none",
+          // Mobile: fixed, slides in from left
+          "fixed inset-y-0 left-0",
+          // Smooth transition for the slide + shadow
+          "transition-[transform,box-shadow] duration-300 ease-in-out",
+          // Open state on mobile
+          isOpen
+            ? "translate-x-0 shadow-2xl shadow-black/30"
+            : "-translate-x-full lg:shadow-none",
         )}
       >
         {/* Brand Header */}

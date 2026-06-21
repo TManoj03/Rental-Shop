@@ -5,7 +5,12 @@ import {
   FileText, 
   Search, 
   ArrowRight,
-  Plus
+  Plus,
+  ChevronLeft,
+  ChevronRight,
+  Wallet,
+  AlertCircle,
+  CheckCircle2
 } from "lucide-react";
 import { 
   Table, 
@@ -26,15 +31,16 @@ import {
   DialogDescription
 } from "@/components/ui/dialog";
 import { Booking, BookingItem, Equipment, Customer } from "@/lib/mock-data";
+import { ConfirmationDialog } from "@/components/ui/confirmation-dialog";
 
 interface BookingsManagerProps {
   bookings: Booking[];
   equipment: Equipment[];
   customers: Customer[];
   onAddBooking: (booking: Omit<Booking, "id" | "status">) => void;
-  onReturnBooking: (bookingId: string) => void;
+  onReturnBooking: (bookingId: string, balancePaid: number) => void;
   onMarkOverdue: (bookingId: string) => void;
-  onUpdateBooking: (bookingId: string, data: Partial<Booking>) => void;
+  onUpdateBooking: (bookingId: string, data: Partial<Booking>) => Promise<void>;
   isAddModalOpen: boolean;
   setIsAddModalOpen: (open: boolean) => void;
   preSelectedEqId: string | null;
@@ -57,6 +63,15 @@ export function BookingsManager({
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("All");
 
+  // Pagination state
+  const [currentPage, setCurrentPage] = useState(1);
+  const itemsPerPage = 10;
+
+  // Reset pagination when search query or filter changes
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchQuery, statusFilter]);
+
   // Form states (Multi-Item Cart)
   const [selectedCustomerId, setSelectedCustomerId] = useState("");
   const [bookingItems, setBookingItems] = useState<BookingItem[]>([]);
@@ -64,6 +79,13 @@ export function BookingsManager({
   const [selectedQuantity, setSelectedQuantity] = useState(1);
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
+  const [advancePaid, setAdvancePaid] = useState<number>(0);
+
+  // Check-In (return) modal state
+  const [checkInBooking, setCheckInBooking] = useState<Booking | null>(null);
+  const [isCheckInModalOpen, setIsCheckInModalOpen] = useState(false);
+  const [checkInExtraPayment, setCheckInExtraPayment] = useState<number>(0);
+  const [isCheckingIn, setIsCheckingIn] = useState(false);
 
   // Edit/Extend states
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
@@ -75,6 +97,27 @@ export function BookingsManager({
   const [editStartDate, setEditStartDate] = useState("");
   const [editEndDate, setEditEndDate] = useState("");
   const [editStatus, setEditStatus] = useState<Booking["status"]>("Active");
+
+  // Revert confirmation modal states
+  const [bookingToRevert, setBookingToRevert] = useState<Booking | null>(null);
+  const [isRevertConfirmOpen, setIsRevertConfirmOpen] = useState(false);
+  const [isReverting, setIsReverting] = useState(false);
+
+  const triggerRevertConfirm = (booking: Booking) => {
+    setBookingToRevert(booking);
+    setIsRevertConfirmOpen(true);
+  };
+
+  // Derived state: selected equipment availability
+  const selectedEq = equipment.find((e) => e.id === selectedEquipmentId);
+  const selectedCartQty = selectedEq ? (bookingItems.find(item => item.equipmentId === selectedEq.id)?.quantity || 0) : 0;
+  const selectedAvail = selectedEq ? (selectedEq.totalStock - (selectedEq.rentedCount || 0) - selectedCartQty) : 0;
+
+  // Derived state: selected equipment availability in Edit modal
+  const editSelectedEq = equipment.find((e) => e.id === editSelEqId);
+  const editCartQty = editSelectedEq ? (editBookingItems.find(item => item.equipmentId === editSelectedEq.id)?.quantity || 0) : 0;
+  const editCurrentRentedInBooking = (editingBooking && editSelectedEq) ? (editingBooking.items?.find(item => item.equipmentId === editSelectedEq.id)?.quantity || 0) : 0;
+  const editAvail = editSelectedEq ? (editSelectedEq.totalStock - ((editSelectedEq.rentedCount || 0) - editCurrentRentedInBooking) - editCartQty) : 0;
 
   // Pre-fill equipment selection if triggered from Inventory screen
   useEffect(() => {
@@ -155,30 +198,53 @@ export function BookingsManager({
     }
   }
 
-  const handleBookingSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    const customer = customers.find((c) => c.id === selectedCustomerId);
-
-    if (!customer || bookingItems.length === 0) return;
-
-    onAddBooking({
-      items: bookingItems,
-      customerId: selectedCustomerId,
-      customerName: customer.name,
-      companyName: customer.company,
-      startDate,
-      endDate,
-      totalCost: calculatedCost,
-    });
-
-    // Reset fields
+  const resetAddForm = () => {
     setSelectedCustomerId("");
     setBookingItems([]);
     setSelectedEquipmentId("");
     setSelectedQuantity(1);
     setStartDate("");
     setEndDate("");
+    setAdvancePaid(0);
+  };
+
+  const closeAddModal = () => {
     setIsAddModalOpen(false);
+    resetAddForm();
+  };
+
+  const closeEditModal = () => {
+    setIsEditModalOpen(false);
+    setEditingBooking(null);
+    setEditCustomerId("");
+    setEditBookingItems([]);
+    setEditSelEqId("");
+    setEditSelQty(1);
+    setEditStartDate("");
+    setEditEndDate("");
+    setEditStatus("Active");
+  };
+
+  const handleBookingSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const customer = customers.find((c) => c.id === selectedCustomerId);
+
+    if (!customer || bookingItems.length === 0) return;
+
+    const paid = Math.min(Math.max(0, advancePaid), calculatedCost);
+    onAddBooking({
+      items: bookingItems,
+      customerId: selectedCustomerId,
+      customerName: customer.name,
+      companyName: customer.company || "Individual",
+      startDate,
+      endDate,
+      totalCost: calculatedCost,
+      paidAmount: paid,
+      balanceDue: calculatedCost - paid,
+    });
+
+    closeAddModal();
   };
 
   const handleOpenEditModal = (booking: Booking) => {
@@ -215,7 +281,7 @@ export function BookingsManager({
     onUpdateBooking(editingBooking.id, {
       customerId: editCustomerId,
       customerName: customer.name,
-      companyName: customer.company,
+      companyName: customer.company || "Individual",
       items: editBookingItems,
       startDate: editStartDate,
       endDate: editEndDate,
@@ -223,8 +289,7 @@ export function BookingsManager({
       status: editStatus
     });
 
-    setIsEditModalOpen(false);
-    setEditingBooking(null);
+    closeEditModal();
   };
 
   const getStatusBadge = (status: Booking["status"]) => {
@@ -260,7 +325,7 @@ export function BookingsManager({
   const filteredBookings = bookings.filter((b) => {
     const matchesSearch = 
       b.customerName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      b.companyName.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (b.companyName || "").toLowerCase().includes(searchQuery.toLowerCase()) ||
       b.id.toLowerCase().includes(searchQuery.toLowerCase()) ||
       (b.items && b.items.some(item => item.equipmentName.toLowerCase().includes(searchQuery.toLowerCase()))) ||
       ((b as unknown as Record<string, unknown>).equipmentName && String((b as unknown as Record<string, unknown>).equipmentName).toLowerCase().includes(searchQuery.toLowerCase()));
@@ -291,8 +356,7 @@ export function BookingsManager({
         </Button>
       </div>
 
-      {/* Search & Filter bar */}
-      <div className="bg-white dark:bg-slate-955 p-4 rounded-2xl shadow-sm border border-slate-100 dark:border-slate-850/80 mb-6 flex flex-col sm:flex-row gap-3">
+      <div className="bg-white dark:bg-slate-950 p-4 rounded-2xl shadow-sm border border-slate-100 dark:border-slate-850/80 mb-6 flex flex-col sm:flex-row gap-3">
         <div className="relative flex-1">
           <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 size-4" />
           <input
@@ -321,45 +385,48 @@ export function BookingsManager({
       </div>
 
       {/* Table of bookings */}
-      <div className="bg-white dark:bg-slate-950 rounded-2xl shadow-sm border border-slate-100 dark:border-slate-850 overflow-hidden">
+      <div className="bg-white dark:bg-slate-950 rounded-2xl shadow-sm border border-slate-100 dark:border-slate-850 overflow-hidden p-6">
         {filteredBookings.length > 0 ? (
-          <Table>
+          <div className="space-y-4">
+            <Table>
             <TableHeader className="bg-slate-50 dark:bg-slate-900/60 border-b border-slate-100 dark:border-slate-900">
               <TableRow className="border-none">
                 <TableHead className="text-xs font-black text-slate-400 dark:text-slate-500 uppercase tracking-wider pl-6 py-4">Contract ID</TableHead>
                 <TableHead className="text-xs font-black text-slate-400 dark:text-slate-500 uppercase tracking-wider py-4">Client</TableHead>
                 <TableHead className="text-xs font-black text-slate-400 dark:text-slate-500 uppercase tracking-wider py-4">Equipment Items</TableHead>
                 <TableHead className="text-xs font-black text-slate-400 dark:text-slate-500 uppercase tracking-wider py-4">Dates</TableHead>
-                <TableHead className="text-xs font-black text-slate-400 dark:text-slate-500 uppercase tracking-wider py-4">Charges</TableHead>
+                <TableHead className="text-xs font-black text-slate-400 dark:text-slate-500 uppercase tracking-wider py-4">Charges / Payment</TableHead>
                 <TableHead className="text-xs font-black text-slate-400 dark:text-slate-500 uppercase tracking-wider py-4">Status</TableHead>
                 <TableHead className="text-xs font-black text-slate-400 dark:text-slate-500 uppercase tracking-wider pr-6 py-4 text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody className="divide-y divide-slate-100 dark:divide-slate-900">
-              {filteredBookings.map((b) => (
-                <TableRow 
-                  key={b.id} 
-                  className="hover:bg-slate-50/50 dark:hover:bg-slate-900/10 border-none transition-colors duration-150"
-                >
+              {filteredBookings
+                .slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage)
+                .map((b) => (
+                  <TableRow 
+                    key={b.id} 
+                    className="hover:bg-slate-50/50 dark:hover:bg-slate-900/10 border-none transition-colors duration-150"
+                  >
                   <TableCell className="font-bold text-xs pl-6 py-4 text-slate-900 dark:text-white uppercase">
                     #{b.id}
                   </TableCell>
                   <TableCell className="py-4">
                     <div className="flex flex-col">
                       <span className="font-bold text-slate-850 dark:text-slate-200 text-xs">{b.customerName}</span>
-                      <span className="text-[10px] text-slate-400 dark:text-slate-500 font-semibold">{b.companyName}</span>
+                      <span className="text-[10px] text-slate-400 dark:text-slate-505 font-semibold">{b.companyName || "Individual"}</span>
                     </div>
                   </TableCell>
-                  <TableCell className="py-4 font-bold text-xs text-slate-800 dark:text-slate-200">
-                    <div className="flex flex-col gap-0.5">
+                  <TableCell className="py-4 font-bold text-xs text-slate-800 dark:text-slate-200 max-w-[220px]">
+                    <div className="flex flex-col gap-0.5 whitespace-normal break-words">
                       {b.items && b.items.length > 0 ? (
                         b.items.map((item, idx) => (
-                          <span key={idx} className="block text-[11px]">
+                          <span key={idx} className="block text-[11px] leading-tight">
                             {item.quantity}x {item.equipmentName}
                           </span>
                         ))
                       ) : (
-                        <span className="block text-[11px] italic text-slate-400">
+                        <span className="block text-[11px] italic text-slate-400 leading-tight">
                           {String((b as unknown as Record<string, unknown>).equipmentName || "No items")}
                         </span>
                       )}
@@ -372,8 +439,24 @@ export function BookingsManager({
                       <span>{b.status === "Completed" && b.actualReturnDate ? b.actualReturnDate : b.endDate}</span>
                     </div>
                   </TableCell>
-                  <TableCell className="py-4 font-extrabold text-xs text-slate-900 dark:text-white">
-                    ₹{b.totalCost.toLocaleString("en-IN")}
+                  <TableCell className="py-4">
+                    <div className="space-y-0.5">
+                      <span className="font-extrabold text-xs text-slate-900 dark:text-white block">
+                        ₹{b.totalCost.toLocaleString("en-IN")}
+                      </span>
+                      {(b.paidAmount !== undefined && b.paidAmount < b.totalCost) ? (
+                        <>
+                          <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-bold block">
+                            ✓ Paid ₹{(b.paidAmount || 0).toLocaleString("en-IN")}
+                          </span>
+                          <span className="text-[10px] text-rose-500 dark:text-rose-400 font-bold block">
+                            ⚠ Due ₹{(b.balanceDue || 0).toLocaleString("en-IN")}
+                          </span>
+                        </>
+                      ) : (
+                        <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-bold block">✓ Fully Paid</span>
+                      )}
+                    </div>
                   </TableCell>
                   <TableCell className="py-4">
                     {getStatusBadge(b.status)}
@@ -401,7 +484,11 @@ export function BookingsManager({
                           </Button>
                           <Button
                             size="xs"
-                            onClick={() => onReturnBooking(b.id)}
+                            onClick={() => {
+                              setCheckInBooking(b);
+                              setCheckInExtraPayment(b.balanceDue || 0);
+                              setIsCheckInModalOpen(true);
+                            }}
                             className="bg-slate-900 hover:bg-slate-800 dark:bg-white dark:hover:bg-slate-100 text-white dark:text-slate-950 font-bold rounded-lg text-[10px]"
                           >
                             Check In
@@ -409,13 +496,22 @@ export function BookingsManager({
                         </>
                       )}
                       {b.status === "Completed" && (
-                        <Button
-                          size="xs"
-                          onClick={() => handleOpenEditModal(b)}
-                          className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold rounded-lg text-[10px]"
-                        >
-                          Edit Completed
-                        </Button>
+                        <div className="flex gap-1.5 justify-end">
+                          <Button
+                            size="xs"
+                            onClick={() => triggerRevertConfirm(b)}
+                            className="bg-rose-500/10 hover:bg-rose-500/20 text-rose-600 dark:text-rose-400 font-bold rounded-lg text-[10px] px-2.5"
+                          >
+                            Revert Check In
+                          </Button>
+                          <Button
+                            size="xs"
+                            onClick={() => handleOpenEditModal(b)}
+                            className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold rounded-lg text-[10px]"
+                          >
+                            Edit Completed
+                          </Button>
+                        </div>
                       )}
                       {b.status === "Reserved" && (
                         <Button
@@ -432,6 +528,51 @@ export function BookingsManager({
               ))}
             </TableBody>
           </Table>
+
+          {/* Pagination Controls */}
+          {filteredBookings.length > 0 && (
+            <div className="flex items-center justify-between px-2 py-1 bg-transparent text-slate-500 dark:text-slate-400">
+              <span className="text-[11px] font-bold text-slate-400 dark:text-slate-500">
+                Showing {(currentPage - 1) * itemsPerPage + 1} to {Math.min(currentPage * itemsPerPage, filteredBookings.length)} of {filteredBookings.length} agreements
+              </span>
+              <div className="flex items-center gap-1.5">
+                <Button
+                  variant="outline"
+                  size="icon-sm"
+                  disabled={currentPage === 1}
+                  onClick={() => setCurrentPage((prev) => Math.max(prev - 1, 1))}
+                  className="border-slate-200/80 dark:border-slate-800/60 hover:bg-slate-100 dark:hover:bg-slate-900 rounded-xl disabled:opacity-30"
+                >
+                  <ChevronLeft className="size-3.5" />
+                </Button>
+                {Array.from({ length: Math.ceil(filteredBookings.length / itemsPerPage) }, (_, i) => i + 1).map((page) => (
+                  <Button
+                    key={page}
+                    variant={currentPage === page ? "default" : "outline"}
+                    size="icon-sm"
+                    onClick={() => setCurrentPage(page)}
+                    className={`rounded-xl text-[10px] font-extrabold ${
+                      currentPage === page
+                        ? "bg-amber-500 hover:bg-amber-600 text-slate-950 border-amber-500"
+                        : "border-slate-200/80 dark:border-slate-800/60 hover:bg-slate-100 dark:hover:bg-slate-900"
+                    }`}
+                  >
+                    {page}
+                  </Button>
+                ))}
+                <Button
+                  variant="outline"
+                  size="icon-sm"
+                  disabled={currentPage === Math.ceil(filteredBookings.length / itemsPerPage)}
+                  onClick={() => setCurrentPage((prev) => Math.min(prev + 1, Math.ceil(filteredBookings.length / itemsPerPage)))}
+                  className="border-slate-200/80 dark:border-slate-800/60 hover:bg-slate-100 dark:hover:bg-slate-900 rounded-xl disabled:opacity-30"
+                >
+                  <ChevronRight className="size-3.5" />
+                </Button>
+              </div>
+            </div>
+          )}
+          </div>
         ) : (
           <div className="text-center py-16">
             <FileText className="size-12 text-slate-300 dark:text-slate-700 mx-auto mb-4 stroke-[1.5]" />
@@ -443,9 +584,12 @@ export function BookingsManager({
         )}
       </div>
 
-      {/* Create Booking Modal */}
-      <Dialog open={isAddModalOpen} onOpenChange={setIsAddModalOpen}>
-        <DialogContent className="max-w-md rounded-2xl bg-white dark:bg-slate-950 border border-slate-100 dark:border-slate-850">
+      <Dialog open={isAddModalOpen} onOpenChange={(open) => { if (!open) closeAddModal(); }}>
+        <DialogContent 
+          onPointerDownOutside={(e) => e.preventDefault()}
+          onEscapeKeyDown={(e) => e.preventDefault()}
+          className="max-w-md rounded-2xl bg-white dark:bg-slate-950 border border-slate-100 dark:border-slate-850"
+        >
           <DialogHeader>
             <DialogTitle className="font-heading font-black text-slate-900 dark:text-white">New Rental Agreement</DialogTitle>
             <DialogDescription className="text-xs text-slate-400 dark:text-slate-500">
@@ -466,7 +610,7 @@ export function BookingsManager({
                 <option value="">Choose customer...</option>
                 {customers.map((c) => (
                   <option key={c.id} value={c.id}>
-                    {c.name} ({c.company})
+                    {c.name}{c.company ? ` (${c.company})` : ""}
                   </option>
                 ))}
               </select>
@@ -511,11 +655,13 @@ export function BookingsManager({
                     {equipment
                       .filter((e) => {
                         const cartQty = bookingItems.find(item => item.equipmentId === e.id)?.quantity || 0;
-                        return e.rentedCount + cartQty < e.totalStock && e.maintenanceStatus !== "Under Repair";
+                        const rentedCount = e.rentedCount || 0;
+                        return rentedCount + cartQty < e.totalStock && e.maintenanceStatus !== "Under Repair";
                       })
                       .map((e) => {
                         const cartQty = bookingItems.find(item => item.equipmentId === e.id)?.quantity || 0;
-                        const avail = e.totalStock - e.rentedCount - cartQty;
+                        const rentedCount = e.rentedCount || 0;
+                        const avail = e.totalStock - rentedCount - cartQty;
                         return (
                           <option key={e.id} value={e.id}>
                             {e.name} ({avail} avail) - ₹{e.dailyRate}/d
@@ -525,23 +671,40 @@ export function BookingsManager({
                   </select>
                 </div>
                 <div className="w-16 space-y-1">
-                  <label className="text-[10px] font-bold text-slate-400 dark:text-slate-505 block">Qty</label>
+                  <label className="text-[10px] font-bold text-slate-400 dark:text-slate-505 block flex justify-between items-center">
+                    <span>Qty</span>
+                    {selectedEq && selectedQuantity > selectedAvail && (
+                      <span className="text-[8px] text-rose-500 font-extrabold animate-pulse">* Limit</span>
+                    )}
+                  </label>
                   <input
                     type="number"
                     min="1"
+                    max={selectedEq ? selectedAvail : undefined}
                     value={selectedQuantity}
-                    onChange={(e) => setSelectedQuantity(Math.max(1, parseInt(e.target.value) || 1))}
-                    className="w-full rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-[11px] h-8 px-2 text-slate-700 dark:text-slate-200 outline-none font-semibold"
+                    onChange={(e) => {
+                      const val = parseInt(e.target.value) || 1;
+                      setSelectedQuantity(Math.max(1, selectedEq ? Math.min(selectedAvail, val) : val));
+                    }}
+                    className={`w-full rounded-lg border bg-white dark:bg-slate-900 text-[11px] h-8 px-2 text-slate-700 dark:text-slate-200 outline-none font-semibold ${
+                      selectedEq && selectedQuantity > selectedAvail
+                        ? "border-rose-500 focus:ring-rose-500 focus:border-rose-500"
+                        : "border-slate-200 dark:border-slate-800"
+                    }`}
                   />
                 </div>
                 <button
                   type="button"
-                  disabled={!selectedEquipmentId}
+                  disabled={!selectedEquipmentId || (selectedEq && selectedQuantity > selectedAvail)}
                   onClick={() => {
                     const eq = equipment.find(e => e.id === selectedEquipmentId);
                     if (!eq) return;
                     
                     const existingIdx = bookingItems.findIndex(item => item.equipmentId === selectedEquipmentId);
+                    if (selectedQuantity > selectedAvail) {
+                      return; // safety check
+                    }
+                    
                     if (existingIdx > -1) {
                       setBookingItems(prev => prev.map((item, idx) => 
                         idx === existingIdx 
@@ -590,6 +753,55 @@ export function BookingsManager({
               </div>
             </div>
 
+            {/* Advance / Partial Payment */}
+            {rentalDays > 0 && calculatedCost > 0 && (
+              <div className="space-y-1">
+                <label className="text-xs font-bold text-slate-500 dark:text-slate-400 flex items-center gap-1.5">
+                  <Wallet className="size-3.5 text-amber-500" />
+                  Advance Collected Now (₹)
+                </label>
+                <div className="relative">
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-xs font-bold">₹</span>
+                  <input
+                    type="number"
+                    min={0}
+                    max={calculatedCost}
+                    value={advancePaid}
+                    onChange={(e) => {
+                      const v = Math.min(calculatedCost, Math.max(0, Number(e.target.value)));
+                      setAdvancePaid(v);
+                    }}
+                    className="w-full rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-xs h-9 pl-7 pr-3 text-slate-700 dark:text-slate-200 outline-none focus:ring-1 focus:ring-amber-500 focus:border-amber-500 font-semibold"
+                  />
+                </div>
+                {/* Payment summary */}
+                <div className="grid grid-cols-3 gap-2 mt-2">
+                  <div className="bg-slate-50 dark:bg-slate-900 rounded-xl p-2.5 border border-slate-100 dark:border-slate-850 text-center">
+                    <p className="text-[9px] text-slate-400 font-bold uppercase tracking-wide">Total</p>
+                    <p className="text-xs font-black text-slate-800 dark:text-slate-100">₹{calculatedCost.toLocaleString("en-IN")}</p>
+                  </div>
+                  <div className="bg-emerald-50 dark:bg-emerald-500/10 rounded-xl p-2.5 border border-emerald-100 dark:border-emerald-500/20 text-center">
+                    <p className="text-[9px] text-emerald-600 font-bold uppercase tracking-wide">Paid Now</p>
+                    <p className="text-xs font-black text-emerald-700 dark:text-emerald-400">₹{Math.min(advancePaid, calculatedCost).toLocaleString("en-IN")}</p>
+                  </div>
+                  <div className={`rounded-xl p-2.5 border text-center ${
+                    calculatedCost - advancePaid > 0
+                      ? "bg-rose-50 dark:bg-rose-500/10 border-rose-100 dark:border-rose-500/20"
+                      : "bg-emerald-50 dark:bg-emerald-500/10 border-emerald-100 dark:border-emerald-500/20"
+                  }`}>
+                    <p className={`text-[9px] font-bold uppercase tracking-wide ${
+                      calculatedCost - advancePaid > 0 ? "text-rose-600" : "text-emerald-600"
+                    }`}>Balance</p>
+                    <p className={`text-xs font-black ${
+                      calculatedCost - advancePaid > 0
+                        ? "text-rose-700 dark:text-rose-400"
+                        : "text-emerald-700 dark:text-emerald-400"
+                    }`}>₹{Math.max(0, calculatedCost - advancePaid).toLocaleString("en-IN")}</p>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* Live Pricing Preview */}
             {rentalDays > 0 && calculatedCost > 0 && (
               <div className="bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-850 p-4 rounded-xl space-y-2">
@@ -602,7 +814,7 @@ export function BookingsManager({
                   <span className="text-amber-500 font-extrabold">₹{calculatedCost.toLocaleString("en-IN")}</span>
                 </div>
                 <div className="text-[10px] text-slate-400 dark:text-slate-505 font-medium italic mt-1 leading-snug">
-                  * Pricing structures calculate weekly rates first, adding remaining daily balances. Includes full coverage dispatch insurance.
+                  * Pricing structures calculate weekly rates first, adding remaining daily balances.
                 </div>
               </div>
             )}
@@ -611,8 +823,8 @@ export function BookingsManager({
               <Button 
                 type="button" 
                 variant="outline" 
-                onClick={() => setIsAddModalOpen(false)}
-                className="rounded-xl border border-slate-200 dark:border-slate-855 h-9"
+                onClick={closeAddModal}
+                className="rounded-xl border border-slate-200 dark:border-slate-800 h-9"
               >
                 Cancel
               </Button>
@@ -628,9 +840,12 @@ export function BookingsManager({
         </DialogContent>
       </Dialog>
 
-      {/* Edit/Extend Booking Modal */}
-      <Dialog open={isEditModalOpen} onOpenChange={setIsEditModalOpen}>
-        <DialogContent className="max-w-md rounded-2xl bg-white dark:bg-slate-955 border border-slate-100 dark:border-slate-850">
+      <Dialog open={isEditModalOpen} onOpenChange={(open) => { if (!open) closeEditModal(); }}>
+        <DialogContent 
+          onPointerDownOutside={(e) => e.preventDefault()}
+          onEscapeKeyDown={(e) => e.preventDefault()}
+          className="max-w-md rounded-2xl bg-white dark:bg-slate-950 border border-slate-100 dark:border-slate-850"
+        >
           <DialogHeader>
             <DialogTitle className="font-heading font-black text-slate-900 dark:text-white">Edit / Extend Rental Agreement</DialogTitle>
             <DialogDescription className="text-xs text-slate-400 dark:text-slate-500">
@@ -651,7 +866,7 @@ export function BookingsManager({
                 >
                   {customers.map((c) => (
                     <option key={c.id} value={c.id}>
-                      {c.name} ({c.company})
+                      {c.name}{c.company ? ` (${c.company})` : ""}
                     </option>
                   ))}
                 </select>
@@ -665,7 +880,7 @@ export function BookingsManager({
                 {editBookingItems.length > 0 ? (
                   <div className="space-y-1.5 mb-3 max-h-32 overflow-y-auto pr-1">
                     {editBookingItems.map((item, idx) => (
-                      <div key={idx} className="flex justify-between items-center bg-white dark:bg-slate-955 p-2 rounded-lg border border-slate-100 dark:border-slate-850 text-xs">
+                      <div key={idx} className="flex justify-between items-center bg-white dark:bg-slate-950 p-2 rounded-lg border border-slate-100 dark:border-slate-850 text-xs">
                         <span className="font-bold text-slate-700 dark:text-slate-300">
                           {item.quantity}x {item.equipmentName}
                         </span>
@@ -697,13 +912,15 @@ export function BookingsManager({
                         .filter((e) => {
                           const cartQty = editBookingItems.find(item => item.equipmentId === e.id)?.quantity || 0;
                           const currentRentedInBooking = editingBooking.items?.find(item => item.equipmentId === e.id)?.quantity || 0;
-                          const avail = e.totalStock - (e.rentedCount - currentRentedInBooking) - cartQty;
+                          const rentedCount = e.rentedCount || 0;
+                          const avail = e.totalStock - (rentedCount - currentRentedInBooking) - cartQty;
                           return avail > 0 && e.maintenanceStatus !== "Under Repair";
                         })
                         .map((e) => {
                           const cartQty = editBookingItems.find(item => item.equipmentId === e.id)?.quantity || 0;
                           const currentRentedInBooking = editingBooking.items?.find(item => item.equipmentId === e.id)?.quantity || 0;
-                          const avail = e.totalStock - (e.rentedCount - currentRentedInBooking) - cartQty;
+                          const rentedCount = e.rentedCount || 0;
+                          const avail = e.totalStock - (rentedCount - currentRentedInBooking) - cartQty;
                           return (
                             <option key={e.id} value={e.id}>
                               {e.name} ({avail} avail) - ₹{e.dailyRate}/d
@@ -713,23 +930,40 @@ export function BookingsManager({
                     </select>
                   </div>
                   <div className="w-16 space-y-1">
-                    <label className="text-[10px] font-bold text-slate-400 dark:text-slate-500 block">Qty</label>
+                    <label className="text-[10px] font-bold text-slate-400 dark:text-slate-500 block flex justify-between items-center">
+                      <span>Qty</span>
+                      {editSelectedEq && editSelQty > editAvail && (
+                        <span className="text-[8px] text-rose-500 font-extrabold animate-pulse">* Limit</span>
+                      )}
+                    </label>
                     <input
                       type="number"
                       min="1"
+                      max={editSelectedEq ? editAvail : undefined}
                       value={editSelQty}
-                      onChange={(e) => setEditSelQty(Math.max(1, parseInt(e.target.value) || 1))}
-                      className="w-full rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-[11px] h-8 px-2 text-slate-700 dark:text-slate-200 outline-none font-semibold"
+                      onChange={(e) => {
+                        const val = parseInt(e.target.value) || 1;
+                        setEditSelQty(Math.max(1, editSelectedEq ? Math.min(editAvail, val) : val));
+                      }}
+                      className={`w-full rounded-lg border bg-white dark:bg-slate-900 text-[11px] h-8 px-2 text-slate-700 dark:text-slate-200 outline-none font-semibold ${
+                        editSelectedEq && editSelQty > editAvail
+                          ? "border-rose-500 focus:ring-rose-500 focus:border-rose-500"
+                          : "border-slate-200 dark:border-slate-800"
+                      }`}
                     />
                   </div>
                   <button
                     type="button"
-                    disabled={!editSelEqId}
+                    disabled={!editSelEqId || (editSelectedEq && editSelQty > editAvail)}
                     onClick={() => {
                       const eq = equipment.find(e => e.id === editSelEqId);
                       if (!eq) return;
                       
                       const existingIdx = editBookingItems.findIndex(item => item.equipmentId === editSelEqId);
+                      if (editSelQty > editAvail) {
+                        return; // safety check
+                      }
+                      
                       if (existingIdx > -1) {
                         setEditBookingItems(prev => prev.map((item, idx) => 
                           idx === existingIdx 
@@ -816,8 +1050,8 @@ export function BookingsManager({
                 <Button 
                   type="button" 
                   variant="outline" 
-                  onClick={() => setIsEditModalOpen(false)}
-                  className="rounded-xl border border-slate-200 dark:border-slate-855 h-9"
+                  onClick={closeEditModal}
+                  className="rounded-xl border border-slate-200 dark:border-slate-800 h-9"
                 >
                   Cancel
                 </Button>
@@ -840,6 +1074,138 @@ export function BookingsManager({
           )}
         </DialogContent>
       </Dialog>
+
+      {/* ═══════════ Check-In / Return Modal ═══════════ */}
+      <Dialog open={isCheckInModalOpen} onOpenChange={(open) => { if (!open) { setIsCheckInModalOpen(false); setCheckInBooking(null); } }}>
+        <DialogContent
+          onPointerDownOutside={(e) => e.preventDefault()}
+          onEscapeKeyDown={(e) => e.preventDefault()}
+          className="max-w-sm rounded-2xl bg-white dark:bg-slate-950 border border-slate-100 dark:border-slate-850"
+        >
+          <DialogHeader>
+            <DialogTitle className="font-heading font-black text-slate-900 dark:text-white flex items-center gap-2">
+              <CheckCircle2 className="size-5 text-emerald-500" />
+              Equipment Check-In
+            </DialogTitle>
+            <DialogDescription className="text-xs text-slate-400 dark:text-slate-500">
+              Confirm return for <span className="font-bold text-slate-800 dark:text-slate-200">{checkInBooking?.customerName}</span> — Contract #{checkInBooking?.id.toUpperCase()}
+            </DialogDescription>
+          </DialogHeader>
+
+          {checkInBooking && (
+            <div className="space-y-4 py-2">
+              {/* Payment summary */}
+              <div className="grid grid-cols-2 gap-3">
+                <div className="bg-slate-50 dark:bg-slate-900 rounded-xl p-3 border border-slate-100 dark:border-slate-850">
+                  <p className="text-[9px] text-slate-400 font-bold uppercase tracking-wide mb-1">Total Cost</p>
+                  <p className="text-sm font-black text-slate-800 dark:text-slate-100">₹{checkInBooking.totalCost.toLocaleString("en-IN")}</p>
+                </div>
+                <div className="bg-emerald-50 dark:bg-emerald-500/10 rounded-xl p-3 border border-emerald-100 dark:border-emerald-500/20">
+                  <p className="text-[9px] text-emerald-600 font-bold uppercase tracking-wide mb-1">Already Paid</p>
+                  <p className="text-sm font-black text-emerald-700 dark:text-emerald-400">₹{(checkInBooking.paidAmount || 0).toLocaleString("en-IN")}</p>
+                </div>
+              </div>
+
+              {/* Balance due section */}
+              {(checkInBooking.balanceDue || 0) > 0 ? (
+                <div className="bg-rose-50 dark:bg-rose-500/10 rounded-xl p-4 border border-rose-200 dark:border-rose-500/30 space-y-3">
+                  <div className="flex items-center gap-2">
+                    <AlertCircle className="size-4 text-rose-500 shrink-0" />
+                    <p className="text-xs font-black text-rose-700 dark:text-rose-400">
+                      Balance Due: ₹{(checkInBooking.balanceDue || 0).toLocaleString("en-IN")}
+                    </p>
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 block">Amount Collected Now (₹)</label>
+                    <div className="relative">
+                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-xs font-bold">₹</span>
+                      <input
+                        type="number"
+                        min={0}
+                        max={checkInBooking.balanceDue || 0}
+                        value={checkInExtraPayment}
+                        onChange={(e) => {
+                          const v = Math.min(checkInBooking.balanceDue || 0, Math.max(0, Number(e.target.value)));
+                          setCheckInExtraPayment(v);
+                        }}
+                        className="w-full rounded-xl border border-rose-200 dark:border-rose-500/30 bg-white dark:bg-slate-900 text-xs h-9 pl-7 pr-3 text-slate-700 dark:text-slate-200 outline-none focus:ring-1 focus:ring-rose-400 font-semibold"
+                      />
+                    </div>
+                    {checkInExtraPayment < (checkInBooking.balanceDue || 0) && (
+                      <p className="text-[10px] text-amber-600 dark:text-amber-400 font-semibold">
+                        ⚠ Remaining unpaid: ₹{((checkInBooking.balanceDue || 0) - checkInExtraPayment).toLocaleString("en-IN")}
+                      </p>
+                    )}
+                  </div>
+                </div>
+              ) : (
+                <div className="bg-emerald-50 dark:bg-emerald-500/10 rounded-xl p-3 border border-emerald-200 dark:border-emerald-500/30 flex items-center gap-2">
+                  <CheckCircle2 className="size-4 text-emerald-500 shrink-0" />
+                  <p className="text-xs font-bold text-emerald-700 dark:text-emerald-400">Fully paid — no balance outstanding.</p>
+                </div>
+              )}
+            </div>
+          )}
+
+          <DialogFooter className="pt-2">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => { setIsCheckInModalOpen(false); setCheckInBooking(null); }}
+              className="rounded-xl border border-slate-200 dark:border-slate-800 h-9"
+            >
+              Cancel
+            </Button>
+            <Button
+              disabled={isCheckingIn}
+              onClick={async () => {
+                if (!checkInBooking) return;
+                setIsCheckingIn(true);
+                try {
+                  await onReturnBooking(checkInBooking.id, checkInExtraPayment);
+                } finally {
+                  setIsCheckingIn(false);
+                  setIsCheckInModalOpen(false);
+                  setCheckInBooking(null);
+                }
+              }}
+              className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl h-9 disabled:opacity-50"
+            >
+              {isCheckingIn ? "Processing…" : "Confirm Check-In"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Revert Confirmation Modal */}
+      <ConfirmationDialog
+        isOpen={isRevertConfirmOpen}
+        onClose={() => {
+          setIsRevertConfirmOpen(false);
+          setBookingToRevert(null);
+        }}
+        onConfirm={async () => {
+          if (bookingToRevert) {
+            setIsReverting(true);
+            try {
+              await onUpdateBooking(bookingToRevert.id, { status: "Active" });
+            } catch (err) {
+              console.error(err);
+            } finally {
+              setIsReverting(false);
+              setIsRevertConfirmOpen(false);
+              setBookingToRevert(null);
+            }
+          }
+        }}
+        isLoading={isReverting}
+        title="Revert Booking Return"
+        description="Are you sure you want to revert check-in and mark this booking active again? This will restore rented stock allocations."
+        itemName={bookingToRevert ? `Contract #${bookingToRevert.id.toUpperCase()} - ${bookingToRevert.customerName}` : ""}
+        confirmText="Revert Status"
+        cancelText="Cancel"
+        variant="warning"
+      />
     </div>
   );
 }

@@ -9,6 +9,7 @@ import { BookingsManager } from "@/components/bookings-manager";
 import { CustomersManager } from "@/components/customers-manager";
 import { MaintenanceManager } from "@/components/maintenance-manager";
 import { AuditLogsManager } from "@/components/audit-logs-manager";
+import { ReportsManager } from "@/components/reports-manager";
 import {
   Equipment,
   Customer,
@@ -25,7 +26,7 @@ import {
 
 export default function HomePage() {
   const [activeTab, setActiveTab] = useState("dashboard");
-  const [darkMode, setDarkMode] = useState(false);
+  const [darkMode, setDarkMode] = useState(true);
   const [isMounted, setIsMounted] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
@@ -74,7 +75,7 @@ export default function HomePage() {
         setBookings(Array.isArray(bkData) ? bkData : []);
         setMaintenanceLogs(Array.isArray(maintData) ? maintData : []);
         setAuditLogs(Array.isArray(auditData) ? auditData : []);
-        setDarkMode(getStoredData<boolean>("ironclad_darkmode", false));
+        setDarkMode(getStoredData<boolean>("ironclad_darkmode", true));
         setIsMounted(true);
       } catch (error) {
         console.error("Failed to load backend data:", error);
@@ -95,7 +96,7 @@ export default function HomePage() {
           ),
         );
         setAuditLogs([]);
-        setDarkMode(getStoredData<boolean>("ironclad_darkmode", false));
+        setDarkMode(getStoredData<boolean>("ironclad_darkmode", true));
         setIsMounted(true);
       }
     };
@@ -215,12 +216,21 @@ export default function HomePage() {
   };
 
   // 5. Return Equipment / Return Check-In
-  const handleReturnBooking = async (bookingId: string) => {
+  const handleReturnBooking = async (bookingId: string, balancePaid: number = 0) => {
     try {
+      // Find the booking to compute updated payment fields
+      const booking = bookings.find((b) => b.id === bookingId);
+      const newPaidAmount = (booking?.paidAmount || 0) + balancePaid;
+      const newBalanceDue = Math.max(0, (booking?.totalCost || 0) - newPaidAmount);
+
       const response = await fetch(`/api/bookings/${bookingId}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: "Completed" }),
+        body: JSON.stringify({
+          status: "Completed",
+          paidAmount: newPaidAmount,
+          balanceDue: newBalanceDue,
+        }),
       });
       const updatedBooking = await response.json();
 
@@ -242,6 +252,7 @@ export default function HomePage() {
       console.error("Error returning booking:", error);
     }
   };
+
 
   // 6. Mark booking overdue
   const handleMarkOverdue = async (bookingId: string) => {
@@ -301,8 +312,16 @@ export default function HomePage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(cData),
       });
-      const newCustomer = await response.json();
-      setCustomers((prev) => [...prev, newCustomer]);
+      if (response.ok) {
+        const newCustomer = await response.json();
+        setCustomers((prev) => [...prev, newCustomer]);
+      } else {
+        const errorData = await response.json();
+        alert(
+          errorData.error ||
+            "Failed to add customer. If you just updated database models, please restart your development server to apply Mongoose schema changes.",
+        );
+      }
     } catch (error) {
       console.error("Error adding customer:", error);
     }
@@ -315,16 +334,41 @@ export default function HomePage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(updatedCust),
       });
-      const data = await response.json();
-      setCustomers((prev) => prev.map((c) => (c.id === data.id ? data : c)));
+      if (response.ok) {
+        const data = await response.json();
+        setCustomers((prev) => prev.map((c) => (c.id === data.id ? data : c)));
 
-      // Refresh bookings to reflect new customer name/company
-      const bkRes = await fetch("/api/bookings");
-      const bkData = await bkRes.json();
-      setBookings(bkData);
-      refreshAuditLogs();
+        // Refresh bookings to reflect new customer name/company
+        const bkRes = await fetch("/api/bookings");
+        const bkData = await bkRes.json();
+        setBookings(bkData);
+        refreshAuditLogs();
+      } else {
+        const errorData = await response.json();
+        alert(
+          errorData.error ||
+            "Failed to update customer. If you just updated database models, please restart your development server to apply Mongoose schema changes.",
+        );
+      }
     } catch (error) {
       console.error("Error updating customer:", error);
+    }
+  };
+
+  const handleDeleteCustomer = async (id: string) => {
+    try {
+      const response = await fetch(`/api/customers/${id}`, {
+        method: "DELETE",
+      });
+      if (response.ok) {
+        setCustomers((prev) => prev.filter((c) => c.id !== id));
+        refreshAuditLogs();
+      } else {
+        const errorData = await response.json();
+        alert(errorData.error || "Failed to delete customer");
+      }
+    } catch (error) {
+      console.error("Error deleting customer:", error);
     }
   };
 
@@ -455,6 +499,7 @@ export default function HomePage() {
             bookings={bookings}
             onAddCustomer={handleAddCustomer}
             onUpdateCustomer={handleUpdateCustomer}
+            onDeleteCustomer={handleDeleteCustomer}
           />
         );
       case "maintenance":
@@ -468,6 +513,13 @@ export default function HomePage() {
         );
       case "audit":
         return <AuditLogsManager auditLogs={auditLogs} />;
+      case "reports":
+        return (
+          <ReportsManager
+            bookings={bookings}
+            maintenanceLogs={maintenanceLogs}
+          />
+        );
       default:
         return <div>Dashboard console out of bounds.</div>;
     }
@@ -504,7 +556,7 @@ export default function HomePage() {
       {/* Primary Tab Panel Content */}
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
         {/* Mobile Header */}
-        <header className="lg:hidden h-14 border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-955 flex items-center justify-between px-6 shrink-0 z-30 transition-colors duration-200">
+        <header className="lg:hidden h-14 border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 flex items-center justify-between px-6 shrink-0 z-30 transition-colors duration-200">
           <div className="flex items-center gap-3">
             <button
               onClick={() => setSidebarOpen(true)}

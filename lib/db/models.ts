@@ -55,8 +55,8 @@ const CustomerSchema = new Schema(
   {
     _id: { type: String, required: true }, // custom e.g., "cust-1"
     name: { type: String, required: true },
-    company: { type: String, required: true },
-    email: { type: String, required: true },
+    company: { type: String, required: false },
+    email: { type: String, required: false },
     phone: { type: String, required: true },
     activeRentalsCount: { type: Number, required: true, default: 0 },
     totalSpend: { type: Number, required: true, default: 0 },
@@ -88,6 +88,8 @@ const BookingSchema = new Schema(
     endDate: { type: String, required: true }, // YYYY-MM-DD
     actualReturnDate: { type: String }, // YYYY-MM-DD
     totalCost: { type: Number, required: true },
+    paidAmount: { type: Number, default: 0 },     // advance / partial payment
+    balanceDue: { type: Number, default: 0 },     // outstanding at check-in
     status: {
       type: String,
       required: true,
@@ -127,6 +129,14 @@ const MaintenanceLogSchema = new Schema(
   },
 );
 
+// Force clear cached models in development to support hot-reloaded schema updates
+if (process.env.NODE_ENV === "development") {
+  delete mongoose.models.Equipment;
+  delete mongoose.models.Customer;
+  delete mongoose.models.Booking;
+  delete mongoose.models.MaintenanceLog;
+}
+
 export const EquipmentModel =
   mongoose.models.Equipment || mongoose.model("Equipment", EquipmentSchema);
 export const CustomerModel =
@@ -149,7 +159,7 @@ const AuditLogSchema = new Schema(
       enum: ["Booking", "Customer", "Equipment", "Maintenance"],
     },
     description: { type: String, required: true },
-    operator: { type: String, required: true, default: "Mahesh Verma" },
+    // operator: { type: String, required: true, default: "Mahesh Verma" },
     details: { type: Schema.Types.Mixed },
   },
   {

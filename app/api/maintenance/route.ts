@@ -26,14 +26,14 @@ export async function POST(request: Request) {
       cost: Number(data.cost),
       reportedDate: data.reportedDate,
       status: "Pending",
-      technician: data.technician
+      technician: data.technician,
     });
 
     await newLog.save();
 
     // Set the machine maintenance status to "Requires Service"
     await EquipmentModel.findByIdAndUpdate(data.equipmentId, {
-      $set: { maintenanceStatus: "Requires Service" }
+      $set: { maintenanceStatus: "Requires Service" },
     });
 
     return NextResponse.json(newLog);

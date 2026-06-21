@@ -1,10 +1,15 @@
 import { NextResponse } from "next/server";
 import dbConnect from "@/lib/db/connect";
-import { BookingModel, EquipmentModel, CustomerModel, AuditLogModel } from "@/lib/db/models";
+import {
+  BookingModel,
+  EquipmentModel,
+  CustomerModel,
+  AuditLogModel,
+} from "@/lib/db/models";
 
 export async function PUT(
   request: Request,
-  { params }: { params: Promise<{ id: string }> }
+  { params }: { params: Promise<{ id: string }> },
 ) {
   try {
     await dbConnect();
@@ -19,11 +24,13 @@ export async function PUT(
     // Migration fallback for legacy bookings
     if (!booking.items || booking.items.length === 0) {
       if (booking.equipmentId) {
-        booking.items = [{
-          equipmentId: booking.equipmentId,
-          equipmentName: booking.equipmentName,
-          quantity: 1
-        }];
+        booking.items = [
+          {
+            equipmentId: booking.equipmentId,
+            equipmentName: booking.equipmentName,
+            quantity: 1,
+          },
+        ];
       } else {
         booking.items = [];
       }
@@ -34,7 +41,8 @@ export async function PUT(
     const oldCustId = booking.customerId;
     const newCustId = data.customerId || oldCustId;
     const oldCost = booking.totalCost;
-    const newCost = data.totalCost !== undefined ? Number(data.totalCost) : oldCost;
+    const newCost =
+      data.totalCost !== undefined ? Number(data.totalCost) : oldCost;
 
     // Fetch customer details if swapped
     let newCustName = booking.customerName;
@@ -48,13 +56,14 @@ export async function PUT(
     }
 
     // 1. Equipment rentedCount updates (dynamic stock delta calculation)
-    const wasRenting = (oldStatus === "Active" || oldStatus === "Overdue");
-    const isRenting = (newStatus === "Active" || newStatus === "Overdue");
+    const wasRenting = oldStatus === "Active" || oldStatus === "Overdue";
+    const isRenting = newStatus === "Active" || newStatus === "Overdue";
 
     const oldEqMap: Record<string, number> = {};
     if (wasRenting && booking.items) {
       for (const item of booking.items) {
-        oldEqMap[item.equipmentId] = (oldEqMap[item.equipmentId] || 0) + Number(item.quantity);
+        oldEqMap[item.equipmentId] =
+          (oldEqMap[item.equipmentId] || 0) + Number(item.quantity);
       }
     }
 
@@ -62,67 +71,109 @@ export async function PUT(
     const updatedItems = data.items || booking.items;
     if (isRenting && updatedItems) {
       for (const item of updatedItems) {
-        newEqMap[item.equipmentId] = (newEqMap[item.equipmentId] || 0) + Number(item.quantity);
+        newEqMap[item.equipmentId] =
+          (newEqMap[item.equipmentId] || 0) + Number(item.quantity);
       }
     }
 
-    const allEqIds = new Set([...Object.keys(oldEqMap), ...Object.keys(newEqMap)]);
+    const allEqIds = new Set([
+      ...Object.keys(oldEqMap),
+      ...Object.keys(newEqMap),
+    ]);
     for (const eqId of allEqIds) {
       const oldQty = oldEqMap[eqId] || 0;
       const newQty = newEqMap[eqId] || 0;
       const delta = newQty - oldQty;
       if (delta !== 0) {
-        await EquipmentModel.findByIdAndUpdate(eqId, { $inc: { rentedCount: delta } });
+        await EquipmentModel.findByIdAndUpdate(eqId, {
+          $inc: { rentedCount: delta },
+        });
       }
     }
 
     // 2. Customer activeRentalsCount updates
     if (wasRenting && isRenting && oldCustId !== newCustId) {
-      await CustomerModel.findByIdAndUpdate(oldCustId, { $inc: { activeRentalsCount: -1 } });
-      await CustomerModel.findByIdAndUpdate(newCustId, { $inc: { activeRentalsCount: 1 } });
+      await CustomerModel.findByIdAndUpdate(oldCustId, {
+        $inc: { activeRentalsCount: -1 },
+      });
+      await CustomerModel.findByIdAndUpdate(newCustId, {
+        $inc: { activeRentalsCount: 1 },
+      });
     } else if (wasRenting && !isRenting) {
-      await CustomerModel.findByIdAndUpdate(oldCustId, { $inc: { activeRentalsCount: -1 } });
+      await CustomerModel.findByIdAndUpdate(oldCustId, {
+        $inc: { activeRentalsCount: -1 },
+      });
     } else if (!wasRenting && isRenting) {
-      await CustomerModel.findByIdAndUpdate(newCustId, { $inc: { activeRentalsCount: 1 } });
+      await CustomerModel.findByIdAndUpdate(newCustId, {
+        $inc: { activeRentalsCount: 1 },
+      });
     }
 
     // 3. Customer totalSpend updates
-    const wasCompleted = (oldStatus === "Completed");
-    const isCompleted = (newStatus === "Completed");
+    const wasCompleted = oldStatus === "Completed";
+    const isCompleted = newStatus === "Completed";
 
     if (wasCompleted && isCompleted) {
       if (oldCustId !== newCustId) {
-        await CustomerModel.findByIdAndUpdate(oldCustId, { $inc: { totalSpend: -oldCost } });
-        await CustomerModel.findByIdAndUpdate(newCustId, { $inc: { totalSpend: newCost } });
+        await CustomerModel.findByIdAndUpdate(oldCustId, {
+          $inc: { totalSpend: -oldCost },
+        });
+        await CustomerModel.findByIdAndUpdate(newCustId, {
+          $inc: { totalSpend: newCost },
+        });
       } else if (oldCost !== newCost) {
-        await CustomerModel.findByIdAndUpdate(oldCustId, { $inc: { totalSpend: newCost - oldCost } });
+        await CustomerModel.findByIdAndUpdate(oldCustId, {
+          $inc: { totalSpend: newCost - oldCost },
+        });
       }
     } else if (wasCompleted && !isCompleted) {
-      await CustomerModel.findByIdAndUpdate(oldCustId, { $inc: { totalSpend: -oldCost } });
+      await CustomerModel.findByIdAndUpdate(oldCustId, {
+        $inc: { totalSpend: -oldCost },
+      });
     } else if (!wasCompleted && isCompleted) {
-      await CustomerModel.findByIdAndUpdate(newCustId, { $inc: { totalSpend: newCost } });
+      await CustomerModel.findByIdAndUpdate(newCustId, {
+        $inc: { totalSpend: newCost },
+      });
     }
 
     // Build changes for audit log
     const changes: string[] = [];
     if (oldCustId !== newCustId) {
-      changes.push(`Customer changed from "${booking.customerName}" to "${newCustName}"`);
+      changes.push(
+        `Customer changed from "${booking.customerName}" to "${newCustName}"`,
+      );
     }
 
-    const oldItemsDesc = booking.items.map((i: { quantity: number; equipmentName: string }) => `${i.quantity}x ${i.equipmentName}`).join(", ");
-    const newItemsDesc = updatedItems.map((i: { quantity: number; equipmentName: string }) => `${i.quantity}x ${i.equipmentName}`).join(", ");
+    const oldItemsDesc = booking.items
+      .map(
+        (i: { quantity: number; equipmentName: string }) =>
+          `${i.quantity}x ${i.equipmentName}`,
+      )
+      .join(", ");
+    const newItemsDesc = updatedItems
+      .map(
+        (i: { quantity: number; equipmentName: string }) =>
+          `${i.quantity}x ${i.equipmentName}`,
+      )
+      .join(", ");
     if (oldItemsDesc !== newItemsDesc) {
       changes.push(`Items changed from [${oldItemsDesc}] to [${newItemsDesc}]`);
     }
 
     if (data.startDate && booking.startDate !== data.startDate) {
-      changes.push(`Start Date changed from "${booking.startDate}" to "${data.startDate}"`);
+      changes.push(
+        `Start Date changed from "${booking.startDate}" to "${data.startDate}"`,
+      );
     }
     if (data.endDate && booking.endDate !== data.endDate) {
-      changes.push(`End Date changed from "${booking.endDate}" to "${data.endDate}"`);
+      changes.push(
+        `End Date changed from "${booking.endDate}" to "${data.endDate}"`,
+      );
     }
     if (oldCost !== newCost) {
-      changes.push(`Total Cost changed from ₹${oldCost.toLocaleString("en-IN")} to ₹${newCost.toLocaleString("en-IN")}`);
+      changes.push(
+        `Total Cost changed from ₹${oldCost.toLocaleString("en-IN")} to ₹${newCost.toLocaleString("en-IN")}`,
+      );
     }
     if (oldStatus !== newStatus) {
       changes.push(`Status changed from "${oldStatus}" to "${newStatus}"`);
@@ -138,8 +189,15 @@ export async function PUT(
     booking.totalCost = newCost;
     booking.status = newStatus;
 
+    // Persist payment fields if provided
+    if (data.paidAmount !== undefined) booking.paidAmount = Number(data.paidAmount);
+    if (data.balanceDue !== undefined) booking.balanceDue = Number(data.balanceDue);
+
     if (newStatus === "Completed") {
-      booking.actualReturnDate = data.actualReturnDate || booking.actualReturnDate || new Date().toISOString().split("T")[0];
+      booking.actualReturnDate =
+        data.actualReturnDate ||
+        booking.actualReturnDate ||
+        new Date().toISOString().split("T")[0];
     } else {
       booking.actualReturnDate = undefined;
     }
@@ -155,12 +213,16 @@ export async function PUT(
       let action = "Booking Updated";
       let description = `Contract ${id} details updated: ${changes.join("; ")}`;
 
-      if (oldStatus !== "Completed" && newStatus === "Completed" && oldStatus !== "Reserved") {
+      if (
+        oldStatus !== "Completed" &&
+        newStatus === "Completed" &&
+        oldStatus !== "Reserved"
+      ) {
         action = "Booking Checked In";
-        description = `Contract ${id} checked in: ${newItemsDesc} returned by customer "${newCustName}" (${newCompanyName})`;
+        description = `Contract ${id} checked in: ${newItemsDesc} returned by customer "${newCustName}"${newCompanyName ? ` (${newCompanyName})` : ""}`;
       } else if (oldStatus !== "Overdue" && newStatus === "Overdue") {
         action = "Booking Flagged Overdue";
-        description = `Contract ${id} flagged overdue: Customer "${newCustName}" (${newCompanyName}) has not returned ${newItemsDesc}`;
+        description = `Contract ${id} flagged overdue: Customer "${newCustName}"${newCompanyName ? ` (${newCompanyName})` : ""} has not returned ${newItemsDesc}`;
       }
 
       const auditId = `audit-${Math.floor(100000 + Math.random() * 900000)}`;
@@ -170,7 +232,7 @@ export async function PUT(
         entityId: id,
         entityType: "Booking",
         description,
-        operator: "Mahesh Verma",
+        // operator: "Mahesh Verma",
         details: {
           changes: changes,
           before: {
@@ -179,7 +241,7 @@ export async function PUT(
             startDate: booking.startDate,
             endDate: booking.endDate,
             totalCost: oldCost,
-            status: oldStatus
+            status: oldStatus,
           },
           after: {
             customerId: newCustId,
@@ -187,9 +249,9 @@ export async function PUT(
             startDate: data.startDate || booking.startDate,
             endDate: data.endDate || booking.endDate,
             totalCost: newCost,
-            status: newStatus
-          }
-        }
+            status: newStatus,
+          },
+        },
       });
       await auditLog.save();
     }
@@ -200,4 +262,3 @@ export async function PUT(
     return NextResponse.json({ error: err.message }, { status: 500 });
   }
 }
-
